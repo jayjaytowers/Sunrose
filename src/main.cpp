@@ -24,15 +24,16 @@ const int   daylightOffset_sec = 0;
 #define LEDS_POR_SEG  17  // Leds calculados por segmento
 #define SEG_POR_DIG   7
 #define LEDS_POR_DIG  (LEDS_POR_SEG * SEG_POR_DIG) // 119 leds
-#define SEPARADORES   11  // 3 leds por punto + 5 leds guion
-#define TOTAL_LEDS    ((LEDS_POR_DIG * 4) + SEPARADORES) // 485 leds
+#define DOS_PUNTOS    8  // 4 leds por punto
+#define GUION         4  // 4 leds guion
+#define TOTAL_LEDS    ((LEDS_POR_DIG * 4) + DOS_PUNTOS + GUION) // 488 leds
 
 Adafruit_NeoPixel TiraDeLeds (TOTAL_LEDS, DATA_PIN, NEO_GRB + NEO_KHZ800);
 
 // Colores del Reloj (puedes cambiarlos a gusto, formato RGB)
-const uint32_t ColorHora = TiraDeLeds.Color(0, 255, 0);       // Verde para la hora
-const uint32_t ColorSeparador  = TiraDeLeds.Color(255, 100, 0);     // Naranja para los separadores
-const uint32_t Apagado  = TiraDeLeds.Color(0, 0, 0);         // Apagado
+const uint32_t ColorHora = TiraDeLeds.Color(255, 0, 0);         // Rojo para la hora
+const uint32_t ColorSeparador  = TiraDeLeds.Color(255, 100, 0); // Naranja para los separadores
+const uint32_t Apagado  = TiraDeLeds.Color(0, 0, 0);            // Apagado
 
 // Representación de dígitos en 7 segmentos (Bitwise: A,B,C,D,E,F,G)
 // 1 = Encendido, 0 = Apagado
@@ -54,6 +55,17 @@ int horas = 0;
 int minutos = 0;
 unsigned long ultSincNTP = 0;
 
+void setup_wifi() {
+  Serial.print("Conectando a Wokwi-GUEST");
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.write("\n"); // Nueva línea después de la conexión exitosa
+  Serial.println("¡Conectado al WiFi de Wokwi!");
+}
+
 void setup() {
   Serial.begin (115200);
   
@@ -61,14 +73,17 @@ void setup() {
   TiraDeLeds.show (); // Inicializa todos los leds en apagado
   TiraDeLeds.setBrightness (150); // Ajusta el brillo (0-255) para controlar el consumo
 
-  // Conexión Wi-Fi
-  WiFi.begin (ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay (500);
-    Serial.print (".");
-  }
+  setup_wifi ();
 
+  // Configuración NTP
   configTime (gmtOffset_sec, daylightOffset_sec, ntpServer);
+
+  Serial.println("Sincronizando hora con NTP...");
+  while (!getLocalTime (nullptr)) {
+    Serial.print(".");
+    delay(500);
+  }
+  Serial.println("Hora sincronizada con NTP.");
 }
 
 void loop() {
@@ -114,7 +129,7 @@ void mostrarEnDisplay () {
 
   // --- SEPARADORES CENTRALES (Led 238 al 246) ---
   int sepStart = LEDS_POR_DIG * 2;
-  for (int i = 0; i < SEPARADORES; i++) {
+  for (int i = 0; i < DOS_PUNTOS; i++) {
     // Parpadeo de los dos puntos/guion usando los segundos del sistema
     struct tm timeinfo;
     getLocalTime (&timeinfo);
@@ -126,7 +141,7 @@ void mostrarEnDisplay () {
   }
 
   // Dígito 2 (Decenas de Minuto) -> Empieza después de los separadores (led 247)
-  int d2Start = (LEDS_POR_DIG * 2) + SEPARADORES;
+  int d2Start = (LEDS_POR_DIG * 2) + DOS_PUNTOS + GUION; 
   muestraDigito(2, minutos / 10, d2Start);
 
   // Dígito 3 (Unidades de Minuto) -> Empieza en led 366
