@@ -31,9 +31,9 @@ const int   daylightOffset_sec = 0;
 Adafruit_NeoPixel TiraDeLeds (TOTAL_LEDS, DATA_PIN, NEO_GRB + NEO_KHZ800);
 
 // Colores del Reloj (puedes cambiarlos a gusto, formato RGB)
-const uint32_t ColorHora = TiraDeLeds.Color(255, 0, 0);         // Rojo para la hora
-const uint32_t ColorSeparador  = TiraDeLeds.Color(255, 100, 0); // Naranja para los separadores
-const uint32_t Apagado  = TiraDeLeds.Color(0, 0, 0);            // Apagado
+const uint32_t ColorHora = TiraDeLeds.Color(0, 255, 0);       // Verde para la hora
+const uint32_t ColorSeparador  = TiraDeLeds.Color(0, 255, 0); // Verde para los separadores
+const uint32_t Apagado  = TiraDeLeds.Color(0, 0, 0);          // Apagado
 
 // Representación de dígitos en 7 segmentos (Bitwise: A,B,C,D,E,F,G)
 // 1 = Encendido, 0 = Apagado
@@ -77,13 +77,6 @@ void setup() {
 
   // Configuración NTP
   configTime (gmtOffset_sec, daylightOffset_sec, ntpServer);
-
-  Serial.println("Sincronizando hora con NTP...");
-  while (!getLocalTime (nullptr)) {
-    Serial.print(".");
-    delay(500);
-  }
-  Serial.println("Hora sincronizada con NTP.");
 }
 
 void loop() {
