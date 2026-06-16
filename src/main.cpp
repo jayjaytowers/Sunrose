@@ -1,3 +1,13 @@
+/*
+ * Sunrose WebUI
+ * Interfaz de control para reloj/timbre escolar
+ *
+ * Plataforma : ESP32-C3 mini
+ * Framework  : Arduino (PlatformIO)
+ * Simulador  : Wokwi
+ *
+ */
+ 
 #include <Arduino.h>
 #include <WiFi.h>
 #include <AsyncTCP.h>
@@ -5,20 +15,20 @@
 #include "time.h"
 #include <Adafruit_NeoPixel.h>
 
-// --- Prototipos ---
+// ─── Prototipos  ─────────────────────────────────
 void mostrarEnDisplay ();
 void actualizaHora ();
 
-// --- Configuración Wi-Fi ---
+// ─── Configuración Wi-Fi  ─────────────────────────────────
 const char* ssid = "Wokwi-GUEST";
 const char* password = "";
 
-// --- Configuración NTP ---
+// ─── Configuración NTP ────────────────────────────────────
 const char* ntpServer = "ar.pool.ntp.org";
 const long  gmtOffset_sec = -10800; // GMT-3
 const int   daylightOffset_sec = 0;
 
-// --- Configuración Neopixel ---
+// ─── Configuración Neopixel ─────────────────────────────────
 #define DATA_PIN          5   
 #define LEDS_POR_SEG      17  
 #define SEG_POR_DIG       7
@@ -27,12 +37,29 @@ const int   daylightOffset_sec = 0;
 #define GUION             4   
 #define TOTAL_LEDS        ((LEDS_POR_DIG * 4) + DOS_PUNTOS + GUION) 
 
+// ─── Configuración del timbre  ─────────────────────────────────
+#define BELL_PIN          2
+
+// ─── Estado global ──────────────────────────────────────────────
+struct BellConfig {
+  String  date      = "";
+  String  time      = "";
+  int     duration  = 3;    // segundos
+  String  volume    = "Medio";
+  // Horario simple: hasta 8 timbres por día (hora:minuto)
+  String  schedDay  = "Lunes";
+  String  schedT1   = "07:00";
+  String  schedT2   = "13:00";
+};
+BellConfig cfg;
+
+// ─── Panel de leds del reloj  ─────────────────────────────────
 Adafruit_NeoPixel TiraDeLeds (TOTAL_LEDS, DATA_PIN, NEO_GRB + NEO_KHZ800);
 
-// --- Servidor Web Async ---
+// ─── Servidor Web Async ──────────────────────────────────────────────────────────
 AsyncWebServer server(80);
 
-// --- Variables de Estado y Color ---
+// ─── Variables de Estado y Color ─────────────────────────────────────────────────
 int tonoElegido = 120; // Guardamos el valor del slider (0-359 grados)
 uint32_t ColorHora;
 uint32_t ColorPuntosHora;
@@ -42,8 +69,8 @@ uint32_t ColorPuntosFecha;
 uint32_t ColorGuionFecha;
 const uint32_t Apagado = TiraDeLeds.Color(0, 0, 0);
 
-char stringModoWeb[20] = "INICIALIZANDO...";
-char stringValorWeb[20] = "00:00";
+char stringModoWeb [20] = "Iniciando...";
+char stringValorWeb [20] = "00:00";
 
 // Mapeo 7 segmentos
 const byte Digitos [] = {
@@ -54,60 +81,222 @@ const byte Digitos [] = {
 int horas = 0, minutos = 0, segundos = 0, dias = 1, meses = 1;
 unsigned long ultSincNTP = 0;
 
-// --- Código HTML / CSS / JS de la Página Web ---
-const char index_html[] PROGMEM = R"rawliteral(
+// ─── HTML de la interfaz (PROGMEM para ahorrar RAM) ──────────────────────────
+const char HTML_PAGE[] PROGMEM = R"rawhtml(
 <!DOCTYPE html>
 <html lang="es">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Panel de Control - Reloj RGB</title>
-    <style>
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #121212; color: #e0e0e0; text-align: center; margin: 0; padding: 20px; }
-        .container { max-width: 500px; margin: auto; background: #1e1e1e; padding: 30px; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
-        h1 { color: #00ff66; margin-bottom: 25px; font-size: 24px; }
-        .card { background: #292929; padding: 15px; border-radius: 10px; margin-bottom: 20px; border-left: 5px solid #00ff66; }
-        .label { font-size: 12px; text-transform: uppercase; color: #888; letter-spacing: 1px; }
-        .value { font-size: 32px; font-weight: bold; font-family: monospace; color: #fff; margin-top: 5px; }
-        .slider-container { margin-top: 30px; }
-        input[type=range] { -webkit-appearance: none; width: 100%; background: linear-gradient(to right, red, yellow, green, cyan, blue, magenta, red); hieght: 15px; border-radius: 8px; outline: none; height: 12px; }
-        input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 25px; height: 25px; border-radius: 50%; background: #ffffff; cursor: pointer; box-shadow: 0 0 5px #000; }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sunrose</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', sans-serif; background: #f0f0f5; min-height: 100vh; display: flex; justify-content: center; padding: 20px 0 40px; }
+    .app { width: 100%; max-width: 400px; }
+
+    .status-bar { background: #2e7d32; color: #fff; padding: 10px 14px; font-size: 13px; border-radius: 12px 12px 0 0; display: flex; align-items: center; gap: 8px; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: #a5d6a7; flex-shrink: 0; }
+
+    .body { background: #fff; border: 1px solid #ddd; border-top: none; border-radius: 0 0 12px 12px; padding: 20px 16px; }
+    h1 { text-align: center; font-size: 22px; font-weight: 600; color: #111; margin-bottom: 2px; }
+    .subtitle { text-align: center; font-size: 13px; color: #666; margin-bottom: 20px; display: flex; align-items: center; gap: 8px; }
+    .subtitle::before, .subtitle::after { content: ''; flex: 1; height: 1px; background: #ddd; }
+
+    .btn { display: block; width: 100%; padding: 14px; background: #c62828; color: #fff; border: none; border-radius: 8px; font-size: 15px; font-weight: 500; cursor: pointer; margin-bottom: 10px; text-align: center; transition: background .15s; }
+    .btn:hover { background: #b71c1c; }
+    .btn:active { background: #8b0000; }
+    .btn-manual { background: #1565c0; }
+    .btn-manual:hover { background: #0d47a1; }
+
+    .submenu { border: 2px dashed #c62828; border-radius: 8px; padding: 14px; margin-top: -4px; margin-bottom: 10px; background: #fffde7; display: none; }
+    .submenu.open { display: block; }
+    label { font-size: 13px; color: #555; display: block; margin: 10px 0 4px; }
+    label:first-child { margin-top: 0; }
+    select, input[type=text] { width: 100%; padding: 8px 10px; border: 1px solid #ccc; border-radius: 6px; font-size: 14px; background: #fff; color: #111; }
+    .btn-save { display: block; width: 100%; padding: 11px; background: #5c7a9e; color: #fff; border: none; border-radius: 6px; font-size: 14px; font-weight: 500; cursor: pointer; margin-top: 12px; }
+    .btn-save:hover { background: #4a6480; }
+
+    .toast { display: none; background: #2e7d32; color: #fff; font-size: 13px; padding: 9px 14px; border-radius: 8px; text-align: center; margin-bottom: 10px; }
+    .toast.show { display: block; }
+    .toast.error { background: #c62828; }
+
+    .bell-anim { display: none; font-size: 32px; text-align: center; padding: 6px; animation: ring .3s infinite alternate; }
+    .bell-anim.active { display: block; }
+    @keyframes ring { from { transform: rotate(-15deg); } to { transform: rotate(15deg); } }
+  </style>
 </head>
 <body>
-    <div class="container">
-        <h1>Reloj de Pared WS2812B</h1>
-        
-        <div class="card">
-            <div id="web-modo" class="label">Cargando...</div>
-            <div id="web-valor" class="value">--:--</div>
-        </div>
+<div class="app">
+  <div class="status-bar">
+    <div class="dot"></div>
+    <span id="status-text">Conectando...</span>
+  </div>
 
-        <div class="slider-container">
-            <div class="label" style="margin-bottom: 10px;">Color de los Dígitos (Tono HSV)</div>
-            <input type="range" id="colorSlider" min="0" max="359" value="%SLIDER_VAL%" onchange="enviarColor(this.value)">
-        </div>
+  <div class="body">
+    <h1>Sunrose</h1>
+    <p class="subtitle">Panel de control</p>
+
+    <!-- ── Fecha y Hora ──────────────────────────────── -->
+    <button class="btn" onclick="toggle('datetime')">📅 Configurar Fecha y Hora</button>
+    <div class="submenu" id="menu-datetime">
+      <label>Fecha (YYYY-MM-DD):</label>
+      <input type="text" id="inp-date" placeholder="2026-06-16">
+      <label>Hora (HH:MM):</label>
+      <select id="inp-time"></select>
+      <button class="btn-save" onclick="saveDateTime()">💾 Guardar</button>
     </div>
+    <div class="toast" id="toast-datetime"></div>
 
-    <script>
-        // Función para pedir datos en tiempo real al ESP32 (Cada 1 segundo)
-        setInterval(function() {
-            fetch('/status')
-                .then(response => response.json())
-                .then(data => {
-                    document.getElementById('web-modo').innerText = data.modo;
-                    document.getElementById('web-valor').innerText = data.valor;
-                });
-        }, 1000);
+    <!-- ── Timbre Manual ─────────────────────────────── -->
+    <button class="btn btn-manual" onclick="ringBell()">🔔 Timbre Manual</button>
+    <div class="bell-anim" id="bell-anim">🔔</div>
+    <div class="toast" id="toast-bell"></div>
 
-        // Función para enviar el valor del slider sin recargar la página
-        function enviarColor(val) {
-            fetch('/setcolor?value=' + val);
-        }
-    </script>
+    <!-- ── Horario Diario ────────────────────────────── -->
+    <button class="btn" onclick="toggle('schedule')">📆 Horario Diario</button>
+    <div class="submenu" id="menu-schedule">
+      <label>Día:</label>
+      <select id="sched-day">
+        <option>Lunes</option><option>Martes</option><option>Miércoles</option>
+        <option>Jueves</option><option>Viernes</option><option>Sábado</option>
+      </select>
+      <label>Timbre 1:</label>
+      <select id="sched-t1"></select>
+      <label>Timbre 2:</label>
+      <select id="sched-t2"></select>
+      <button class="btn-save" onclick="saveSchedule()">💾 Guardar Horario</button>
+    </div>
+    <div class="toast" id="toast-schedule"></div>
+
+    <!-- ── Configuración del Timbre ──────────────────── -->
+    <button class="btn" onclick="toggle('bellsetup')">⚙️ Configuración del Timbre</button>
+    <div class="submenu" id="menu-bellsetup">
+      <label>Duración del toque (seg):</label>
+      <select id="bell-dur">
+        <option value="1">1</option><option value="2">2</option>
+        <option value="3" selected>3</option><option value="5">5</option>
+        <option value="10">10</option>
+      </select>
+      <label>Volumen:</label>
+      <select id="bell-vol">
+        <option>Bajo</option><option selected>Medio</option><option>Alto</option>
+      </select>
+      <button class="btn-save" onclick="saveBellSetup()">💾 Guardar Configuración</button>
+    </div>
+    <div class="toast" id="toast-bellsetup"></div>
+  </div>
+</div>
+
+<script>
+// Poblar selects de hora
+function populateTimes(selId, defaultVal) {
+  const sel = document.getElementById(selId);
+  for (let h = 0; h < 24; h++) {
+    for (let m = 0; m < 60; m += 15) {
+      const v = String(h).padStart(2,'0') + ':' + String(m).padStart(2,'0');
+      const o = document.createElement('option');
+      o.value = o.textContent = v;
+      if (v === defaultVal) o.selected = true;
+      sel.appendChild(o);
+    }
+  }
+}
+populateTimes('inp-time',  '07:00');
+populateTimes('sched-t1', '07:00');
+populateTimes('sched-t2', '13:00');
+
+// Estado del servidor
+function updateStatus() {
+  fetch('/status')
+    .then(r => r.json())
+    .then(d => {
+      document.getElementById('status-text').textContent =
+        'Online ✔ [Wi-Fi: ESP32-Bell] | ' + d.time;
+    })
+    .catch(() => {
+      document.getElementById('status-text').textContent = 'Sin conexión';
+    });
+}
+updateStatus();
+setInterval(updateStatus, 5000);
+
+// Toggle submenús
+function toggle(id) {
+  const el = document.getElementById('menu-' + id);
+  const open = el.classList.contains('open');
+  document.querySelectorAll('.submenu').forEach(m => m.classList.remove('open'));
+  if (!open) el.classList.add('open');
+}
+
+// Toast helper
+function toast(id, msg, isError) {
+  const t = document.getElementById('toast-' + id);
+  t.textContent = msg;
+  t.className = 'toast show' + (isError ? ' error' : '');
+  setTimeout(() => t.className = 'toast', 3000);
+}
+
+// POST helper
+async function post(url, data) {
+  const params = new URLSearchParams(data);
+  const r = await fetch(url, { method: 'POST', body: params,
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
+  return r.json();
+}
+
+// Guardar fecha/hora
+async function saveDateTime() {
+  const date = document.getElementById('inp-date').value.trim();
+  const time = document.getElementById('inp-time').value;
+  if (!date) { toast('datetime', '⚠ Ingresá una fecha', true); return; }
+  const r = await post('/save-datetime', { date, time });
+  toast('datetime', r.ok ? '✔ ' + r.msg : '✘ Error: ' + r.msg, !r.ok);
+}
+
+// Timbre manual
+async function ringBell() {
+  document.getElementById('bell-anim').classList.add('active');
+  const r = await post('/ring', {});
+  setTimeout(() => document.getElementById('bell-anim').classList.remove('active'), 3500);
+  toast('bell', r.ok ? '✔ ' + r.msg : '✘ Error', !r.ok);
+}
+
+// Guardar horario
+async function saveSchedule() {
+  const day = document.getElementById('sched-day').value;
+  const t1  = document.getElementById('sched-t1').value;
+  const t2  = document.getElementById('sched-t2').value;
+  const r = await post('/save-schedule', { day, t1, t2 });
+  toast('schedule', r.ok ? '✔ ' + r.msg : '✘ Error', !r.ok);
+}
+
+// Guardar config timbre
+async function saveBellSetup() {
+  const duration = document.getElementById('bell-dur').value;
+  const volume   = document.getElementById('bell-vol').value;
+  const r = await post('/save-bellsetup', { duration, volume });
+  toast('bellsetup', r.ok ? '✔ ' + r.msg : '✘ Error', !r.ok);
+}
+</script>
 </body>
 </html>
-)rawliteral";
+)rawhtml";
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+void ringBell(int durationSec) {
+  Serial.printf("[SUNROSE] Activando %d seg\n", durationSec);
+  digitalWrite(BELL_PIN, HIGH);
+  delay(durationSec * 1000);
+  digitalWrite(BELL_PIN, LOW);
+}
+
+String jsonOk(const String& msg) {
+  return "{\"ok\":true,\"msg\":\"" + msg + "\"}";
+}
+
+String jsonErr(const String& msg) {
+  return "{\"ok\":false,\"msg\":\"" + msg + "\"}";
+}
 
 void actualizarPaletaColores(int hueGrados) {
   uint32_t hueLeds = map(hueGrados, 0, 359, 0, 65535);
@@ -133,19 +322,19 @@ String procesadorTemplates(const String& var) {
   return String();
 }
 
-void setup_wifi() {
-  Serial.print("Conectando a Wokwi-GUEST");
+void configurarWiFi () {
+  Serial.print("[INFO] Conectando a: " + String(ssid));
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
   }
   Serial.write("\n"); 
-  Serial.println("¡Conectado al WiFi de Wokwi!");
-  Serial.print("Dirección IP: http://");
-  Serial.println(WiFi.localIP());
+  Serial.println("[INFO] Conectado a la red WiFi: " + String(ssid));
+  Serial.println("[SERVER] Dirección IP: http://" + String(WiFi.localIP()));
 }
 
+// ─── Setup ────────────────────────────────────────────────────────────────────
 void setup() {
   Serial.begin (115200);
   
@@ -153,15 +342,15 @@ void setup() {
   TiraDeLeds.show (); 
   TiraDeLeds.setBrightness (150); 
 
-  actualizarPaletaColores(tonoElegido); 
+  actualizarPaletaColores (tonoElegido); 
 
-  setup_wifi ();
+  configurarWiFi ();
 
-  // --- CONFIGURACIÓN DE RUTAS WEB ---
+  // ── Rutas del servidor ────────────────────────────────────────────────────
   
   // 1. Ruta Principal (Carga la interfaz gráfica)
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
-    request->send_P(200, "text/html", index_html, procesadorTemplates);
+    request->send_P(200, "text/html", HTML_PAGE, procesadorTemplates);
   });
 
   // 2. Ruta de Estado (Devuelve un JSON ligero con lo que se ve en pantalla)
@@ -176,7 +365,7 @@ void setup() {
     if (request->hasParam("value")) {
       tonoElegido = request->getParam("value")->value().toInt();
       actualizarPaletaColores(tonoElegido);
-      Serial.printf("Web nativa actualizó tono a: %d°\n", tonoElegido);
+      Serial.printf("[SUNROSE] Color actualizado: %d°\n", tonoElegido);
     }
     request->send(200, "text/plain", "OK");
   });
