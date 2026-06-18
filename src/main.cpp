@@ -1,13 +1,13 @@
 /*
- * Sunrose WebUI
+ * SUNROSE
  * Interfaz de control para reloj/timbre escolar
  *
  * Plataforma : ESP32-C3 mini
  * Framework  : Arduino (PlatformIO)
  * Simulador  : Wokwi
  *
- */
- 
+  */
+
 #include <Arduino.h>
 #include <WiFi.h>
 #include <AsyncTCP.h>
@@ -15,20 +15,27 @@
 #include "time.h"
 #include <Adafruit_NeoPixel.h>
 
-// ─── Prototipos  ─────────────────────────────────
-void mostrarEnDisplay ();
-void actualizaHora ();
-
 // ─── Configuración Wi-Fi  ─────────────────────────────────
 const char* ssid = "Wokwi-GUEST";
 const char* password = "";
+const int WIFI_CHANNEL = 6;
 
-// ─── Configuración NTP ────────────────────────────────────
+// ─── Configuración NTP  ─────────────────────────────────
 const char* ntpServer = "ar.pool.ntp.org";
 const long  gmtOffset_sec = -10800; // GMT-3
 const int   daylightOffset_sec = 0;
 
-// ─── Configuración Neopixel ─────────────────────────────────
+// ─── Prototipos ─────────────────────────────────
+void mostrarEnDisplay ();
+void actualizaHora ();
+void configurarWiFi();
+void actualizarPaletaColores(int hueGrados);
+void ringBell(int durationSec);
+void saveDateTime(AsyncWebServerRequest* req);
+void saveSchedule(AsyncWebServerRequest* req);
+void saveBellSetup(AsyncWebServerRequest* req);
+
+// ─── Pines de conexión ────────────────────────────────────────────────────
 #define DATA_PIN          5   
 #define LEDS_POR_SEG      17  
 #define SEG_POR_DIG       7
@@ -36,11 +43,9 @@ const int   daylightOffset_sec = 0;
 #define DOS_PUNTOS        8   
 #define GUION             4   
 #define TOTAL_LEDS        ((LEDS_POR_DIG * 4) + DOS_PUNTOS + GUION) 
-
-// ─── Configuración del timbre  ─────────────────────────────────
 #define BELL_PIN          2
 
-// ─── Estado global ──────────────────────────────────────────────
+// ─── Estado global ────────────────────────────────────────────────────────────
 struct BellConfig {
   String  date      = "";
   String  time      = "";
@@ -51,15 +56,14 @@ struct BellConfig {
   String  schedT1   = "07:00";
   String  schedT2   = "13:00";
 };
-BellConfig cfg;
 
-// ─── Panel de leds del reloj  ─────────────────────────────────
+// ─── Instancias  ─────────────────────────────────
+BellConfig cfg;
+AsyncWebServer server(80);
 Adafruit_NeoPixel TiraDeLeds (TOTAL_LEDS, DATA_PIN, NEO_GRB + NEO_KHZ800);
 
-// ─── Servidor Web Async ──────────────────────────────────────────────────────────
-AsyncWebServer server(80);
-
-// ─── Variables de Estado y Color ─────────────────────────────────────────────────
+// ─── Variables de estado  ─────────────────────────────────
+// --- Variables de Estado y Color ---
 int tonoElegido = 120; // Guardamos el valor del slider (0-359 grados)
 uint32_t ColorHora;
 uint32_t ColorPuntosHora;
@@ -69,8 +73,8 @@ uint32_t ColorPuntosFecha;
 uint32_t ColorGuionFecha;
 const uint32_t Apagado = TiraDeLeds.Color(0, 0, 0);
 
-char stringModoWeb [20] = "Iniciando...";
-char stringValorWeb [20] = "00:00";
+char stringModoWeb[20] = "INICIALIZANDO...";
+char stringValorWeb[20] = "00:00";
 
 // Mapeo 7 segmentos
 const byte Digitos [] = {
@@ -88,7 +92,7 @@ const char HTML_PAGE[] PROGMEM = R"rawhtml(
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Sunrose</title>
+  <title>SUNROSE</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: 'Segoe UI', sans-serif; background: #f0f0f5; min-height: 100vh; display: flex; justify-content: center; padding: 20px 0 40px; }
@@ -133,8 +137,8 @@ const char HTML_PAGE[] PROGMEM = R"rawhtml(
   </div>
 
   <div class="body">
-    <h1>Sunrose</h1>
-    <p class="subtitle">Panel de control</p>
+    <h1>SUNROSE</h1>
+    <p class="subtitle">SuperSync Technologies</p>
 
     <!-- ── Fecha y Hora ──────────────────────────────── -->
     <button class="btn" onclick="toggle('datetime')">📅 Configurar Fecha y Hora</button>
@@ -283,105 +287,6 @@ async function saveBellSetup() {
 )rawhtml";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-void ringBell(int durationSec) {
-  Serial.printf("[SUNROSE] Activando %d seg\n", durationSec);
-  digitalWrite(BELL_PIN, HIGH);
-  delay(durationSec * 1000);
-  digitalWrite(BELL_PIN, LOW);
-}
-
-String jsonOk(const String& msg) {
-  return "{\"ok\":true,\"msg\":\"" + msg + "\"}";
-}
-
-String jsonErr(const String& msg) {
-  return "{\"ok\":false,\"msg\":\"" + msg + "\"}";
-}
-
-void actualizarPaletaColores(int hueGrados) {
-  uint32_t hueLeds = map(hueGrados, 0, 359, 0, 65535);
-  uint32_t colorUsuario = TiraDeLeds.ColorHSV(hueLeds, 255, 255);
-  
-  uint32_t hueFecha = (hueLeds + 32768) % 65536;
-  uint32_t colorContraste = TiraDeLeds.ColorHSV(hueFecha, 255, 255);
-
-  ColorHora         = colorUsuario;
-  ColorPuntosHora   = colorUsuario;
-  ColorGuionHora    = TiraDeLeds.Color(40, 40, 40); 
-  
-  ColorFecha        = colorContraste; 
-  ColorPuntosFecha  = Apagado;
-  ColorGuionFecha   = colorContraste;
-}
-
-// Reemplaza los marcadores (%SLIDER_VAL%) del HTML estático con variables reales del microcontrolador
-String procesadorTemplates(const String& var) {
-  if (var == "SLIDER_VAL") {
-    return String(tonoElegido);
-  }
-  return String();
-}
-
-void configurarWiFi () {
-  Serial.print("[INFO] Conectando a: " + String(ssid));
-  WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.write("\n"); 
-  Serial.println("[INFO] Conectado a la red WiFi: " + String(ssid));
-  Serial.println("[SERVER] Dirección IP: http://" + String(WiFi.localIP()));
-}
-
-// ─── Setup ────────────────────────────────────────────────────────────────────
-void setup() {
-  Serial.begin (115200);
-  
-  TiraDeLeds.begin ();
-  TiraDeLeds.show (); 
-  TiraDeLeds.setBrightness (150); 
-
-  actualizarPaletaColores (tonoElegido); 
-
-  configurarWiFi ();
-
-  // ── Rutas del servidor ────────────────────────────────────────────────────
-  
-  // 1. Ruta Principal (Carga la interfaz gráfica)
-  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
-    request->send_P(200, "text/html", HTML_PAGE, procesadorTemplates);
-  });
-
-  // 2. Ruta de Estado (Devuelve un JSON ligero con lo que se ve en pantalla)
-  server.on("/status", HTTP_GET, [](AsyncWebServerRequest *request){
-    char jsonResponse[64];
-    sprintf(jsonResponse, "{\"modo\":\"%s\",\"valor\":\"%s\"}", stringModoWeb, stringValorWeb);
-    request->send(200, "application/json", jsonResponse);
-  });
-
-  // 3. Ruta para recibir el cambio de color desde el Slider
-  server.on("/setcolor", HTTP_GET, [](AsyncWebServerRequest *request){
-    if (request->hasParam("value")) {
-      tonoElegido = request->getParam("value")->value().toInt();
-      actualizarPaletaColores(tonoElegido);
-      Serial.printf("[SUNROSE] Color actualizado: %d°\n", tonoElegido);
-    }
-    request->send(200, "text/plain", "OK");
-  });
-
-  server.begin();
-  configTime (gmtOffset_sec, daylightOffset_sec, ntpServer);
-}
-
-void loop() {
-  if (millis () - ultSincNTP >= 1000) {
-    ultSincNTP = millis ();
-    actualizaHora ();
-    mostrarEnDisplay ();
-  }
-}
-
 void actualizaHora () {
   struct tm timeinfo;
   if (!getLocalTime (&timeinfo)) return;
@@ -458,4 +363,152 @@ void mostrarEnDisplay () {
   muestraDigito(segundoGrupo % 10, d3Start, colorActualTexto);
 
   TiraDeLeds.show();
+}
+
+void ringBell(int durationSec) {
+  Serial.printf("[BELL] Activando %d seg\n", durationSec);
+  digitalWrite(BELL_PIN, HIGH);
+  delay(durationSec * 1000);
+  digitalWrite(BELL_PIN, LOW);
+}
+
+String jsonOk(const String& msg) {
+  return "{\"ok\":true,\"msg\":\"" + msg + "\"}";
+}
+
+String jsonErr(const String& msg) {
+  return "{\"ok\":false,\"msg\":\"" + msg + "\"}";
+}
+
+void actualizarPaletaColores(int hueGrados) {
+  uint32_t hueLeds = map(hueGrados, 0, 359, 0, 65535);
+  uint32_t colorUsuario = TiraDeLeds.ColorHSV(hueLeds, 255, 255);
+  
+  uint32_t hueFecha = (hueLeds + 32768) % 65536;
+  uint32_t colorContraste = TiraDeLeds.ColorHSV(hueFecha, 255, 255);
+
+  ColorHora         = colorUsuario;
+  ColorPuntosHora   = colorUsuario;
+  ColorGuionHora    = TiraDeLeds.Color(40, 40, 40); 
+  
+  ColorFecha        = colorContraste; 
+  ColorPuntosFecha  = Apagado;
+  ColorGuionFecha   = colorContraste;
+}
+
+// Reemplaza los marcadores (%SLIDER_VAL%) del HTML estático con variables reales del microcontrolador
+String procesadorTemplates(const String& var) {
+  if (var == "SLIDER_VAL") {
+    return String(tonoElegido);
+  }
+  return String();
+}
+
+void configurarWiFi () {
+  Serial.print ("[INFO] Conectando a " + String(ssid) + "...");
+  WiFi.begin (ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay (500);
+    Serial.print (".");
+  }
+  Serial.println();
+  Serial.println ("[INFO] ¡Conectado a WiFi " + String(ssid) + "!");
+  Serial.println("[INFO] Dirección IP: " + WiFi.localIP().toString());
+}
+
+// ─── Setup ────────────────────────────────────────────────────────────────────
+void setup() {
+  Serial.begin(115200);
+
+  // Inicialización de tira de LEDs
+  TiraDeLeds.begin ();
+  TiraDeLeds.show (); 
+  TiraDeLeds.setBrightness (150); 
+  actualizarPaletaColores(tonoElegido); 
+
+  configurarWiFi();
+
+  // ── Rutas del servidor ────────────────────────────────────────────────────
+  // Página principal
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest* req) {
+    req->send_P(200, "text/html", HTML_PAGE);
+  });
+
+  // Estado (JSON)
+  server.on("/status", HTTP_GET, [](AsyncWebServerRequest* req) {
+    String body = "{\"ok\":true,\"time\":\"";
+    // En producción, usar RTC real. Aquí devolvemos millis() como ejemplo.
+    unsigned long s = millis() / 1000;
+    unsigned long h = (s / 3600) % 24;
+    unsigned long m = (s / 60) % 60;
+    char buf[8];
+    snprintf(buf, sizeof(buf), "%02lu:%02lu", h, m);
+    body += String(buf) + "\"}";
+    req->send(200, "application/json", body);
+  });
+
+  // Guardar fecha y hora
+  server.on("/save-datetime", HTTP_POST, [](AsyncWebServerRequest* req) {
+    if (!req->hasParam("date", true) || !req->hasParam("time", true)) {
+      req->send(400, "application/json", jsonErr("Parámetros faltantes"));
+      return;
+    }
+    cfg.date = req->getParam("date", true)->value();
+    cfg.time = req->getParam("time", true)->value();
+    Serial.printf("[CFG] Fecha: %s  Hora: %s\n", cfg.date.c_str(), cfg.time.c_str());
+    req->send(200, "application/json", jsonOk("Fecha " + cfg.date + " / " + cfg.time + " guardada"));
+  });
+
+  // Timbre manual
+  server.on("/ring", HTTP_POST, [](AsyncWebServerRequest* req) {
+    Serial.println("[BELL] Timbre manual activado");
+    ringBell(cfg.duration);
+    req->send(200, "application/json", jsonOk("Timbre activado por " + String(cfg.duration) + " seg"));
+  });
+
+  // Guardar horario
+  server.on("/save-schedule", HTTP_POST, [](AsyncWebServerRequest* req) {
+    if (!req->hasParam("day", true)) {
+      req->send(400, "application/json", jsonErr("Parámetros faltantes"));
+      return;
+    }
+    cfg.schedDay = req->getParam("day",  true)->value();
+    cfg.schedT1  = req->getParam("t1",   true)->value();
+    cfg.schedT2  = req->getParam("t2",   true)->value();
+    Serial.printf("[CFG] Horario %s: %s / %s\n",
+      cfg.schedDay.c_str(), cfg.schedT1.c_str(), cfg.schedT2.c_str());
+    req->send(200, "application/json",
+      jsonOk(cfg.schedDay + ": " + cfg.schedT1 + " y " + cfg.schedT2));
+  });
+
+  // Configuración del timbre
+  server.on("/save-bellsetup", HTTP_POST, [](AsyncWebServerRequest* req) {
+    if (req->hasParam("duration", true))
+      cfg.duration = req->getParam("duration", true)->value().toInt();
+    if (req->hasParam("volume", true))
+      cfg.volume = req->getParam("volume", true)->value();
+    Serial.printf("[CFG] Duración: %d seg  Volumen: %s\n", cfg.duration, cfg.volume.c_str());
+    req->send(200, "application/json",
+      jsonOk("Duración " + String(cfg.duration) + "s / Vol: " + cfg.volume));
+  });
+
+  // 404
+  server.onNotFound([](AsyncWebServerRequest* req) {
+    req->send(404, "application/json", jsonErr("Ruta no encontrada"));
+  });
+
+  configTime (gmtOffset_sec, daylightOffset_sec, ntpServer);
+  server.begin();
+  Serial.println("[SUNROSE] Servidor HTTP iniciado en el puerto 80");
+  Serial.println("[SUNROSE] Accede a http://" + WiFi.localIP().toString() + " en tu navegador");
+}
+
+// ─── Loop ─────────────────────────────────────────────────────────────────────
+void loop() {
+  // ESPAsyncWebServer maneja todo en interrupciones.
+  if (millis () - ultSincNTP >= 1000) {
+  ultSincNTP = millis ();
+  actualizaHora ();
+  mostrarEnDisplay ();
+  }
 }
